@@ -1,0 +1,8 @@
+.DS_Store
+audit.log
+audit.log.bak
+*.swp
+*.swo
+node_modules/
+dist/
+build/
