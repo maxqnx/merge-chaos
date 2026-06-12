@@ -1,0 +1,29 @@
+{
+  "name": "merge-chaos",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maxqnx/merge-chaos.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/maxqnx/merge-chaos/issues"
+  },
+  "homepage": "https://github.com/maxqnx/merge-chaos#readme",
+  "devDependencies": {
+    "playwright": "^1.60.0"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.4.0",
+    "@capacitor/cli": "^8.4.0",
+    "@capacitor/core": "^8.4.0"
+  }
+}

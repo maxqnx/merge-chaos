@@ -233,7 +233,8 @@ class BootScene extends Phaser.Scene {
     const btnW = W - 40;
     const btnH = 66;
     const bx = 20;
-    const by = Math.round(H * 0.670);
+    const isAndroid = /Android/i.test(navigator.userAgent);
+    const by = Math.round(H * (isAndroid ? 0.60 : 0.670));
 
     // Outer glow haze
     const glow = this.add.graphics().setAlpha(0);
@@ -287,25 +288,41 @@ class BootScene extends Phaser.Scene {
 
     // Interaction
     const hit = this.add.zone(W / 2, by + btnH / 2, btnW, btnH + 14).setInteractive({ useHandCursor: true });
+    let isActivating = false;
 
     hit.on('pointerover', () => {
-      if (btnText.alpha < 0.9) return; // не мешать entrance-анимации
+      if (btnText.alpha < 0.9 || isActivating) return;
       this.tweens.killTweensOf([btn, btnText, shine, border]);
       this.tweens.add({ targets: [btn, btnText, shine, border], scaleX: 1.025, scaleY: 1.025, duration: 130 });
     });
     hit.on('pointerout', () => {
-      if (btnText.alpha < 0.9) return;
+      if (btnText.alpha < 0.9 || isActivating) return;
       this.tweens.killTweensOf([btn, btnText, shine, border]);
       this.tweens.add({ targets: [btn, btnText, shine, border], scaleX: 1, scaleY: 1, duration: 130 });
     });
-    hit.on('pointerdown', () => {
+
+    // Activate on pointerup (more reliable than pointerdown on mobile WebView)
+    hit.on('pointerup', () => {
+      if (isActivating || btnText.alpha < 0.9) {
+        console.log('[BootScene] Tap ignored: isActivating=' + isActivating + ' alpha=' + btnText.alpha);
+        return;
+      }
+      isActivating = true;
+      console.log('[BootScene] PLAY NOW tapped — starting GameScene');
+      
+      this.tweens.killTweensOf([btn, btnText, shine, border]);
       this.tweens.add({
         targets: [btn, btnText, shine, border],
         scaleX: 0.97, scaleY: 0.97, duration: 75,
         onComplete: () => {
+          console.log('[BootScene] Scale tween complete — flashing camera');
           this.cameras.main.flash(220, 130, 50, 240, true);
           this.cameras.main.fadeOut(300, 0, 0, 0);
-          this.time.delayedCall(300, () => this.scene.start('GameScene'));
+          console.log('[BootScene] Fade started — scheduling GameScene start');
+          this.time.delayedCall(300, () => {
+            console.log('[BootScene] Starting GameScene now');
+            this.scene.start('GameScene');
+          });
         }
       });
     });

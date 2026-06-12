@@ -282,6 +282,9 @@ if (item.id === 'freeze' && (wave + 1) % 4 === 0) → показать badge   /
 | Сессия 20 | Visual Redesign v3: гексагональный badge (BootScene), силуэты существ в evolution chain, full-width кнопка PLAY NOW, diagonal grid в фоне, UIScene HUD без pills (vertical separators), bottom bar с силуэтами. Итог: структурно верно, но дизайн по-прежнему flat/несовременный — нужен принципиально другой подход к глубине и атмосфере. |
 | Сессия 21 | BootScene atmosphere pass: blobs → 35 floating particles, badge radial glow, scan line, pulsing halo за силуэтами, кнопка glow + mini particle burst. Итог: изменения почти невидимые — все симуляции через полупрозрачные круги. |
 | Сессия 22 | BootScene postFX overhaul: включён Phaser 3.60 WebGL FX Pipeline. Camera vignette; CHAOS 88px + postFX.addGlow(teal, 6, 32px); MERGE postFX gold; badge fillGradientStyle; каждый силуэт postFX.addGlow(creature color) + scale entrance; btn/btnText postFX gold glow; 3D bevel bottom shadow bar; частицы 3-4px, alpha 0.45-0.85. |
+| Сессия 23 | Deep Research — 7 агентов. Phaser 3.60 API аудит, GLSL шейдеры, premium mobile игры паттерны, Playwright tooling. Имплементация НЕ начата — только план. |
+| Сессия 24 | GameScene Visual Upgrade: camera vignette + dot texture; creature multi-ring aura; tier-colored lvlBadge; enemy distinct shapes; shop outer glow + specular. Затем: **полный Neon Cyberpunk рестайл** — убраны все виньетки, возвращены оригинальные силуэты, применена новая палитра во всех 4 файлах. |
+| Сессия 25 | Performance analysis: CDN load 1115ms, scanlines 233 strokePath, HP bar per-frame. BootScene "VOID CHAOS" redesign: pure black bg + electric violet palette, ghost God silhouette за title, CHAOS 92px white + violet shadow+glow, 5 milestone creatures, purple button. |
 
 ---
 
@@ -569,7 +572,7 @@ if (item.id === 'attack' && hpPct >= 0.7) → '★ BEST' зелёный
 ## Как начать новую сессию
 
 ```
-Прочитай файл ~/merge-chaos/HANDOFF.md и начни Сессию 23.
+11.
 ```
 
 ---
@@ -1400,3 +1403,361 @@ this.tweens.add({
 - `project_merge_chaos.md` — дизайн-решения и стек
 - `evaluation_criteria.md` — чеклист готовности по 4 стадиям
 - `agent_findings.md` — результаты 3 агентов (UX + psychology + code eval)
+
+---
+
+## 🔴 СЕССИЯ 23: UI/UX Deep Research — результаты 7 агентов
+
+### Статус: ТОЛЬКО ПЛАН, ИМПЛЕМЕНТАЦИЯ НЕ НАЧАТА
+
+Сессия 23 была полностью посвящена исследованию. 7 агентов провели глубокий анализ по 4 направлениям. Готовый план: `~/.claude/plans/merge-chaos-handoff-md-vivid-salamander.md`
+
+---
+
+### КРИТИЧЕСКИЕ ФАКТЫ PHASER 3.60 (подтверждено из исходников GitHub)
+
+#### Graphics не принимает preFX — ОБЯЗАТЕЛЕН RenderTexture паттерн
+```javascript
+// ❌ НЕ РАБОТАЕТ
+graphics.preFX.addGlow(...)
+
+// ✅ ПРАВИЛЬНО
+const rt = this.add.renderTexture(x, y, w, h);
+rt.draw(graphics, 0, 0);
+rt.postFX.addGlow(0xc8a951, 8, 0, false, 0.1, 16);
+// preFX на Sprite требует setFXPadding(16)!
+```
+
+#### Полный список встроенных postFX (все доступны в 3.60)
+`addGlow`, `addBloom` (настоящий bloom, отличается от glow!), `addShadow`, `addBlur`, `addVignette`, `addShine`, `addColorMatrix`, `addGradient`, `addBokeh`, `addTiltShift`, `addWipe`, `addReveal`, `addCircle`, `addPixelate`, `addBarrel`, `addDisplacement`
+
+**Твинить FX-контроллер напрямую:**
+```javascript
+const glow = obj.postFX.addGlow(0xffd700, 0);
+this.tweens.add({ targets: glow, outerStrength: 8, duration: 300 });
+// addGlow: quality и distance baked при создании — нельзя менять после!
+```
+
+#### Particle Emitter — API полностью изменён в 3.60
+```javascript
+// ❌ СТАРЫЙ API (удалён, не работает):
+// const manager = this.add.particles('key');
+// const emitter = manager.createEmitter({...});
+
+// ✅ НОВЫЙ API:
+const emitter = this.add.particles(x, y, textureKey, {
+  color: [0xfacc22, 0xf89800, 0xf83600],
+  colorEase: 'quad.out',
+  lifespan: 1200,
+  speed: 150,
+  scale: { start: 0.6, end: 0 },
+  gravityY: 300,
+  blendMode: 'ADD',
+  emitting: false
+});
+emitter.explode(12, targetX, targetY);
+
+// ВАЖНО: нужен textureKey — создать в create():
+const dotGfx = this.make.graphics({ add: false });
+dotGfx.fillStyle(0xffffff); dotGfx.fillCircle(4, 4, 4);
+const dotRT = this.add.renderTexture(0, 0, 8, 8, false);
+dotRT.draw(dotGfx); dotRT.saveTexture('dot');
+// Затем: this.add.particles(x, y, 'dot', config)
+```
+
+#### Custom PostFXPipeline (GLSL шейдер)
+```javascript
+class ColorGradePipeline extends Phaser.Renderer.WebGL.Pipelines.PostFXPipeline {
+  constructor(game) {
+    super({ game, name: 'ColorGrade', fragShader: `
+      precision mediump float;          // mediump = обязателен на мобильных
+      uniform sampler2D uMainSampler;
+      uniform float uContrast;
+      uniform vec3 uTint;
+      varying vec2 outTexCoord;         // outTexCoord (не outTextCoord!)
+      void main() {
+        vec4 c = texture2D(uMainSampler, outTexCoord);
+        c.rgb = mix(vec3(0.5), c.rgb, uContrast);
+        c.rgb *= uTint;
+        gl_FragColor = c;
+      }
+    `});
+  }
+  onPreRender() {
+    this.set1f('uContrast', 1.2);
+    this.set3f('uTint', 0.88, 0.84, 1.0); // лёгкий purple tint
+  }
+}
+// Регистрация в Phaser.Game config: { pipeline: { ColorGradePipeline } }
+// Применение: this.cameras.main.setPostPipeline('ColorGradePipeline');
+```
+
+---
+
+### АУДИТ ТЕКУЩЕГО ВИЗУАЛА (Агент 1)
+
+| Сцена | PostFX | Оценка |
+|-------|--------|--------|
+| BootScene | ✅ addVignette, addGlow на тексте, particles | Структура ✅, depth есть |
+| GameScene | ❌ НОЛЬ postFX | Главная проблема |
+| UIScene | ❌ Нет postFX | Вторичная |
+
+**GameScene — самый большой визуальный долг:**
+- Нет vignette на камере
+- Нет glow на существах (ни на каком уровне)
+- Нет depth на shop картах
+- Враги — одинаковые шары разного цвета (нет shape variety)
+- Base HP bar не реагирует визуально на критический HP
+
+---
+
+### ДИЗАЙН-ПАТТЕРНЫ ИЗ PREMIUM ИГР (Raid Shadow Legends, AFK Arena)
+
+#### Premium Dark Glass Card (6 слоёв для Shop карточек)
+1. **Outer glow** — `fillRoundedRect(x-4, y-4, w+8, h+8)`, alpha 0.08→0.15 pulsing 2000ms
+2. **Main BG** — `fillStyle(0x0d0d1a, 1)`, `fillRoundedRect`
+3. **Double border** — outer 2px alpha 0.4, inner 0.8px alpha 0.15
+4. **Top gradient** — `fillGradientStyle(gold, gold, dark, dark, 0.12, 0.12, 0, 0)` — 60px высота
+5. **Specular highlight** — белый `fillCircle` в top-right (x+85%, y+15%), r=24
+6. **Inner shadow** — тёмный gradient нижние 50px
+
+#### Creature Visual Hierarchy (tier system)
+```javascript
+// Tier badges по уровню (corner badge):
+// 1-2: зелёный circle | 3-4: синий diamond | 5-6: оранжевая star | 7-8: purple crown
+
+// Aura rings (3 концентрических):
+const auraAlpha = cfg.level <= 4
+  ? [0.06, 0.12, 0.20]   // Common/Rare
+  : cfg.level <= 6
+  ? [0.06, 0.14, 0.25]   // Epic
+  : [0.08, 0.16, 0.28];  // Legendary
+
+// Pulsing rim для level 7-8:
+rim.lineStyle(2, 0xa855f7, 0.5);
+rim.strokeCircle(cx, cy, cfg.size + 5);
+this.tweens.add({ targets: rim, alpha: { from: 0.5, to: 0.2 }, duration: 1200, yoyo: true, repeat: -1 });
+
+// Glow интенсивность по уровню (0 для 1-4):
+const glowStr = [0, 0, 0, 0, 3, 5, 7, 10][cfg.level - 1];
+if (glowStr > 0) gfx.postFX.addGlow(cfg.color, glowStr);
+```
+
+#### Micro-animations (точные значения)
+| Анимация | Длит. | Easing | Параметры |
+|----------|-------|--------|-----------|
+| Merge scale burst | 300ms | Back.easeOut | scale 1→1.3→1, hold 100ms |
+| Particle spray | 600ms | Cubic.easeOut | 12 частиц, speed 100-150 |
+| Coin flies to HUD | 500ms | Cubic.easeIn | scale 1→0.3 |
+| Counter pulse | 200ms | Back.easeOut | scale 1→1.2→1, delay 300ms |
+| Enemy attack flash | 100ms | Linear | white 0.3→0 |
+| Level-up ring | 500ms | Quad.easeOut | ring expands + fades |
+| Badge entrance stagger | 400ms | Back.easeOut | 150ms между items |
+
+---
+
+### ИНСТРУМЕНТЫ ДЛЯ УСТАНОВКИ
+
+#### @playwright/mcp НЕ СУЩЕСТВУЕТ — правильный подход:
+```bash
+cd ~/merge-chaos
+npm init -y
+npm install --save-dev playwright pixelmatch pngjs backstopjs browser-sync
+npx playwright install chromium
+```
+
+#### scripts/screenshot-game.js
+```javascript
+const { chromium } = require('playwright');
+async function screenshotGame(name, delay = 2000) {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  await page.setViewportSize({ width: 430, height: 932 });
+  await page.goto('http://localhost:3000', { waitUntil: 'networkidle' });
+  await page.waitForTimeout(delay);
+  await page.locator('canvas').screenshot({ path: `screenshots/${name}.png` });
+  await browser.close();
+}
+const name = process.argv[2] || 'screenshot';
+const delay = parseInt(process.argv[3] || '2000');
+screenshotGame(name, delay);
+```
+
+#### package.json scripts
+```json
+{
+  "scripts": {
+    "dev": "browser-sync start --server . --files 'js/**,index.html' --port 3000",
+    "screenshot": "node scripts/screenshot-game.js",
+    "visual-ref": "npx backstop reference",
+    "visual-test": "npx backstop test",
+    "visual-approve": "npx backstop approve"
+  }
+}
+```
+
+#### phaser3-rex-plugins (опционально, после основных задач)
+```bash
+npm install phaser3-rex-plugins
+# shader-shockwave — для boss spawn волны
+# shader-dissolve — для scene transitions
+# shader-outline — для pixel-perfect outline на silhouettes
+```
+
+---
+
+### ПЛАН РЕАЛИЗАЦИИ (Сессия 24+)
+
+| Фаза | Что делать | Агенты | Файл |
+|------|-----------|--------|------|
+| **1** | npm init + Playwright + baseline screenshots | 1 | — |
+| **2a** | GameScene: camera vignette + ColorGrade pipeline + 'dot' texture | 1 | GameScene.js |
+| **2b** | GameScene: creature aura/glow/tier badges | 1 | GameScene.js |
+| **2c** | GameScene: merge particles + projectile glow + base critical glow | 1 | GameScene.js |
+| **3** | Shop: 6-layer premium glass card | 1 | GameScene.js |
+| **4** | Enemy shapes: Rat/Zombie/Demon/Boss distinct visuals | 1 | GameScene.js |
+| **5** | GLSL fog shader (опционально) | 1 | GameScene.js |
+
+**Все фазы 2-5 в GameScene.js — запускать агентов ПОСЛЕДОВАТЕЛЬНО.**
+
+### Правила для агентов-реализаторов
+1. `Graphics.preFX` не работает → всегда RenderTexture
+2. `setFXPadding(16)` обязателен при preFX на Sprite
+3. Particle emitter требует textureKey → создать 'dot' в create()
+4. `addGlow` quality/distance baked — нельзя менять после создания
+5. GLSL: `outTexCoord` (не `outTextCoord`), `mediump float`
+6. Syntax check после каждого агента: `node -e "new Function(require('fs').readFileSync('js/scenes/GameScene.js','utf8'))()"`
+
+---
+
+## ✅ РЕШЕНО — Сессия 24: GameScene Visual Upgrade
+
+### Что сделано
+
+| Задача | Результат | Файл | Детали |
+|--------|-----------|------|--------|
+| **24-1** Camera vignette | `cameras.main.postFX.addVignette(0.5, 0.5, 0.72, 0.55)` при WebGL | GameScene.js `create()` | Тёмные края, яркий центр |
+| **24-2** Dot texture | `renderTexture` + `saveTexture('pdot')` — готово для particle emitters | GameScene.js `create()` | Создаётся один раз в create() |
+| **24-3** Creature aura rings | 3 концентрических кольца вместо одного outer glow; интенсивность ×2.5 для легендарных | GameScene.js `drawCreatureGfx()` | Заменил `fillStyle(c, 0.06) fillCircle(0,0,s+10)` |
+| **24-4** Creature postFX glow | `gfx.postFX.addGlow(c, gs)` для уровней 5-8; glowStr = [0,0,0,0,4,6,8,12] | GameScene.js `drawCreatureGfx()` | Только если `gfx.postFX` существует |
+| **24-5** Tier-colored badges | Уровни 1-2: зелёный, 3-4: синий, 5-6: оранжевый, 7-8: фиолетовый | GameScene.js (3 места) | `dropCreature`, `spawnCreatureAt`, `updatePreview` |
+| **24-6** Enemy distinct shapes | `_drawEnemyShape(gfx, typeIdx, cfg, isBoss)` новый метод | GameScene.js | Rat=уши+рыло, Zombie=lumpy decay, Demon=рога+chin, Boss=diamond |
+| **24-7** Shop outer glow | Pulsing glow для всех affordable карточек (alpha 0.09, 2000ms) | GameScene.js `_buildShopCard()` | Depth D-1, borderCol основа |
+| **24-8** Shop specular | `fillCircle` белый top-right glint (r=22, alpha 0.08) | GameScene.js `_buildShopCard()` | Только при `canAfford` |
+| **24-9** Shop inner border | Double border — тонкая внутренняя рамка (alpha 0.12) | GameScene.js `_buildShopCard()` | `strokeRoundedRect(x+3, y+3, w-6, h-6, 8)` |
+
+### Ключевые изменения в drawCreatureGfx (актуально после С24)
+
+```javascript
+// Было:
+gfx.fillStyle(c, 0.06); gfx.fillCircle(0, 0, s + 10);
+
+// Стало (multi-ring aura):
+const _aura = cfg.level <= 4
+  ? [[s+16, 0.04], [s+10, 0.09], [s+4, 0.16]]
+  : cfg.level <= 6
+  ? [[s+20, 0.05], [s+13, 0.13], [s+5, 0.23]]
+  : [[s+26, 0.07], [s+16, 0.19], [s+6, 0.34]];
+for (const [_r, _a] of _aura) { gfx.fillStyle(c, _a); gfx.fillCircle(0, 0, _r); }
+
+// В конце drawCreatureGfx (после rim light):
+const _gs = [0, 0, 0, 0, 4, 6, 8, 12][cfg.level - 1];
+if (_gs > 0 && gfx.postFX) gfx.postFX.addGlow(c, _gs, 0, false, 0.1, 14);
+```
+
+### Tier badge colors (актуально после С24)
+```javascript
+// В dropCreature, spawnCreatureAt, updatePreview:
+const tierColor = level <= 2 ? '#4ade80' : level <= 4 ? '#6c9fff' : level <= 6 ? '#f97316' : '#a855f7';
+```
+
+### Архитектура _drawEnemyShape
+```javascript
+_drawEnemyShape(gfx, typeIdx, cfg, isBoss):
+  case 0 Rat:    circle body + pointed ears + snout + dark ear interior
+  case 1 Zombie: main circle + 3 overlap circles (lumpy) + decay patches
+  case 2 Demon:  circle body + 2 horn triangles + angular chin cut
+  case 3 Boss:   outer rings ×2 + diamond shape + inner diamond + center dot
+  // Shared: inner shading + highlight + rim line
+```
+
+### npm setup (после С24)
+```bash
+# package.json создан, playwright установлен для скриншотов
+cd ~/merge-chaos && node scripts/screenshot-game.js
+```
+
+### Следующие приоритеты (Сессия 25+)
+
+| Фаза | Что делать | Приоритет |
+|------|-----------|-----------|
+| **Фаза 2c** | Merge particles через `this.add.particles(x, y, 'pdot', {...})` | HIGH — dot texture готова |
+| **Фаза 5** | GLSL ColorGrade pipeline (contrast + purple tint) в main.js | MED |
+| **Визуал** | GameScene арена atmosphere pass (как BootScene: glow на существах в сетке, lane depth) | MED |
+| **Тест** | Сыграть 3 сессии → audit.log → 3 агента (после С24 изменений) | MED |
+| **Деплой** | Netlify deploy для внешних тестеров | LOW |
+
+---
+
+## ✅ РЕШЕНО — Сессия 25: BootScene "VOID CHAOS" redesign + Performance анализ
+
+### Performance анализ (причины медленной загрузки GameScene)
+
+| Проблема | Описание | Приоритет |
+|---------|---------|----------|
+| **CDN Phaser** | 2.2MB с cdn.jsdelivr.net = 1115ms на localhost, 3-8x больше на мобиле | 🔴 HIGH |
+| **Scanlines loop** | `for(y<H; y+=4)` = 233 отдельных strokePath() в create() | 🔴 HIGH |
+| **HP bar per-frame** | `g.clear()` для всех 21 существ каждый кадр в update() | 🟠 MED |
+| **Enemy HP в tween** | `updateEnemyHpBar()` в `onUpdate` = clear() каждый тик | 🟠 MED |
+
+**Фикс scanlines (TODO следующая сессия):**
+```javascript
+// Один beginPath вместо 233:
+bg.lineStyle(1, 0x000000, 0.08);
+bg.beginPath();
+for (let y = 0; y < H; y += 4) { bg.moveTo(0, y); bg.lineTo(W, y); }
+bg.strokePath();
+```
+
+### BootScene редизайн — "VOID CHAOS"
+
+**Концепция:** убраны золото + teal (шаблон 2015). Единый accent — электрический фиолетовый `#7C3AED`/`#A855F7` (цвет Titan = высший уровень). Чёрный фон с атмосферой.
+
+| Изменение | Что сделано |
+|---------|------------|
+| **Фон** | Pure black + 3 atmospheric violet/crimson hazes. НЕТ scanlines, НЕТ diagonal grid |
+| **Частицы** | Белые + violet, мелкие (r=0.4-1.6px), alpha 0.1-0.4 |
+| **Ghost creature** | God-октагон `alpha=0.04` за title — кинематографическая глубина |
+| **Title** | MERGE (violet, 14px, spaced) + CHAOS (white, 92px, violet shadow blur=44 + postFX glow) |
+| **Evolution chain** | 5 ключевых (Slime/Orc/Dragon/Titan/God) с pulsing halos, label "8 LEVELS OF EVOLUTION" |
+| **Button** | Violet gradient `#A855F7→#5B21B6`, white text, убрано золото |
+| **Footer** | "TOWER DEFENSE × MERGE STRATEGY" |
+
+### Актуальный цветовой словарь BootScene (после С25)
+| Токен | Значение | Где |
+|-------|---------|-----|
+| VOID_BG | `0x000000` | Background fill |
+| VIOLET | `#7C3AED` / `0x7C3AED` | Haze, border, MERGE text |
+| VIOLET_BRIGHT | `#A855F7` / `0xA855F7` | Button top, postFX glow |
+| VIOLET_DEEP | `0x5B21B6` | Button bottom, backgrounds |
+| VIOLET_DARKEST | `0x4C1D95` | Labels, arrows |
+| WHITE | `#FFFFFF` | CHAOS, button text |
+
+### Следующие приоритеты (Сессия 26+)
+
+| Фаза | Что делать | Приоритет |
+|------|-----------|-----------|
+| **Scanlines fix** | Батчинг 233 strokePath() в один — GameScene + BootScene | HIGH |
+| **HP bar optim** | Skip drawCreatureHpBar если hp>=maxHp (перенести check выше clear()) | HIGH |
+| **Фаза 2c** | Merge particles через `this.add.particles(x, y, 'pdot', {...})` | HIGH |
+| **Фаза 5** | GLSL ColorGrade pipeline (contrast + purple tint) в main.js | MED |
+| **Тест** | 3 сессии → audit.log → 3 агента | MED |
+| **Деплой** | Netlify для внешних тестеров | LOW |
+
+---
+
+## Как начать новую сессию
+
+```
+Прочитай файл ~/merge-chaos/HANDOFF.md и начни Сессию 26.
+```
